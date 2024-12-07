@@ -48,6 +48,7 @@ func (b *BPF) Close() {
 	common.AgentLog.Debugln("All links closed!")
 }
 
+// LoadBPF 加载 eBPF 程序和映射，并进行必要的初始化和验证
 func LoadBPF(options ac.AgentOptions) (*BPF, error) {
 	var objs *bpf.AgentObjects
 	var spec *ebpf.CollectionSpec
@@ -55,40 +56,53 @@ func LoadBPF(options ac.AgentOptions) (*BPF, error) {
 	var err error
 	var bf *BPF = &BPF{}
 
+	// 检查内核是否支持 Kprobe 程序类型
 	if err := features.HaveProgramType(ebpf.Kprobe); errors.Is(err, ebpf.ErrNotSupported) {
 		common.AgentLog.Fatalf("Require oldest kernel version is 3.10.0-957, pls check your kernel version by `uname -r`")
 	}
 
+	// 设置 eBPF 集合选项，包括内核类型
 	collectionOptions = &ebpf.CollectionOptions{
 		Programs: ebpf.ProgramOptions{
 			KernelTypes: loadBTFSpec(options),
 		},
 	}
 
+	// 将集合选项存储在全局配置中
 	ac.CollectionOpts = collectionOptions
+
+	// 检查是否支持按容器过滤的能力
 	if !options.Kv.SupportCapability(compatible.SupportFilterByContainer) {
-		// if true {
+		// 加载旧版内核 3.10 的 eBPF 对象
 		lagacyobjs := &bpf.AgentLagacyKernel310Objects{}
 		spec, err = bpf.LoadAgentLagacyKernel310()
 		if err != nil {
 			common.AgentLog.Fatal("load Agent error:", err)
 		}
+		// 过滤函数
 		filterFunctions(spec, *options.Kv)
+		// 加载并分配 eBPF 对象
 		err = spec.LoadAndAssign(lagacyobjs, collectionOptions)
 		objs = AgentObjectsFromLagacyKernel310(lagacyobjs)
 	} else {
+		// 加载当前内核的 eBPF 对象
 		objs = &bpf.AgentObjects{}
 		spec, err = bpf.LoadAgent()
 		if err != nil {
 			common.AgentLog.Fatal("load Agent error:", err)
 		}
+		// 过滤函数
 		filterFunctions(spec, *options.Kv)
+		// 加载并分配 eBPF 对象
 		err = spec.LoadAndAssign(objs, collectionOptions)
 	}
+
+	// 设置 BPF 对象
 	bf.Objs = objs
 	bpf.Objs = objs
 	options.LoadPorgressChannel <- "🍎 Loaded eBPF maps & programs."
 
+	// 检查是否有错误
 	if err != nil {
 		err = errors.Unwrap(errors.Unwrap(err))
 		inner_err, ok := err.(*ebpf.VerifierError)
@@ -100,12 +114,14 @@ func LoadBPF(options ac.AgentOptions) (*BPF, error) {
 		return nil, err
 	}
 
+	// 设置并验证参数
 	var validateResult = setAndValidateParameters(options.Ctx, &options)
 	if !validateResult {
 		return nil, fmt.Errorf("validate param failed!")
 	}
 	options.LoadPorgressChannel <- "🍓 Setup traffic filters"
 
+	// 注释掉的代码用于加载和附加 BPF 程序
 	// var links *list.List
 	// if options.LoadBpfProgramFunction != nil {
 	// 	links = options.LoadBpfProgramFunction()
@@ -117,12 +133,13 @@ func LoadBPF(options ac.AgentOptions) (*BPF, error) {
 	// 	attachOpenSslUprobes(links, options, options.Kv, objs)
 	// }
 	// attachNfFunctions(links)
+
+	// 拉取进程退出事件
 	bpf.PullProcessExitEvents(options.Ctx, []chan *bpf.AgentProcessExitEvent{initProcExitEventChannel(options.Ctx)})
 
 	// bf.links = links
 	return bf, nil
 }
-
 func (bf *BPF) AttachProgs(options ac.AgentOptions) error {
 	var links *list.List
 	if options.LoadBpfProgramFunction != nil {
@@ -341,9 +358,14 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 	return true
 }
 
+// attachBpfProgs 附加 eBPF 程序到指定的网络接口和内核版本
+// ifName: 网络接口名称
+// kernelVersion: 内核版本信息
+// options: 代理选项
 func attachBpfProgs(ifName string, kernelVersion *compatible.KernelVersion, options *ac.AgentOptions) *list.List {
 	linkList := list.New()
 
+	// 检查内核是否支持 XDP，并尝试附加 XDP 程序
 	if kernelVersion.SupportCapability(compatible.SupportXDP) {
 		l, err := bpf.AttachXdpWithSpecifiedIfName(options.IfName)
 		if err != nil {
@@ -353,6 +375,7 @@ func attachBpfProgs(ifName string, kernelVersion *compatible.KernelVersion, opti
 		}
 	}
 
+	// 检查内核是否支持 Raw Tracepoint，并尝试附加 TCP destroy raw tracepoint 程序
 	if kernelVersion.SupportCapability(compatible.SupportRawTracepoint) {
 		l, err := bpf.AttachRawTracepointTcpDestroySockEntry()
 		if err != nil {
@@ -362,15 +385,18 @@ func attachBpfProgs(ifName string, kernelVersion *compatible.KernelVersion, opti
 		}
 	}
 
+	// 获取非关键步骤
 	nonCriticalSteps := getNonCriticalSteps()
 	for step, functions := range kernelVersion.InstrumentFunctions {
 		_, isNonCriticalStep := nonCriticalSteps[step]
+		// 如果是性能模式且步骤是非关键步骤，则跳过
 		if options.PerformanceMode && isNonCriticalStep {
 			continue
 		}
 		for idx, function := range functions {
 			var err error
 			var l link.Link
+			// 根据函数类型附加相应的 eBPF 程序
 			if function.IsKprobe() {
 				l, err = bpf.Kprobe(function.GetKprobeName(), bpf.GetProgramFromObjs(bpf.Objs, function.BPFGoProgName))
 			} else if function.IsTracepoint() {
@@ -382,9 +408,10 @@ func attachBpfProgs(ifName string, kernelVersion *compatible.KernelVersion, opti
 				panic(fmt.Sprintf("invalid program type: %v", function))
 			}
 			if err != nil {
+				// 如果附加失败且是最后一个函数，处理错误
 				if idx == len(functions)-1 {
 					if isNonCriticalStep {
-						common.AgentLog.Debugf("Attach failed: %v, functions: %v skip it because it's a non-criticalstep", err, functions)
+						common.AgentLog.Debugf("Attach failed: %v, functions: %v skip it because it's a non-critical step", err, functions)
 					} else {
 						common.AgentLog.Fatalf("Attach failed: %v, functions: %v", err, functions)
 					}
@@ -398,6 +425,7 @@ func attachBpfProgs(ifName string, kernelVersion *compatible.KernelVersion, opti
 		}
 	}
 
+	// 附加各种系统调用的 eBPF 程序
 	linkList.PushBack(bpf.AttachSyscallAcceptEntry())
 	linkList.PushBack(bpf.AttachSyscallAcceptExit())
 

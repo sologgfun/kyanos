@@ -1,14 +1,16 @@
 package watch
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"kyanos/agent/analysis/common"
-	"kyanos/agent/protocol"
 	rc "kyanos/agent/render/common"
 	"kyanos/bpf"
 	c "kyanos/common"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -532,57 +534,145 @@ func (k watchKeyMap) FullHelp() [][]key.Binding {
 
 func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, options WatchOptions) {
 	if options.DebugOutput {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case r := <-ch:
-				c.BPFEventLog.Warnln(r.String(common.AnnotatedRecordToStringOptions{
-					Nano: false,
-					MetricTypeSet: common.MetricTypeSet{
-						common.ResponseSize:                 false,
-						common.RequestSize:                  false,
-						common.ReadFromSocketBufferDuration: true,
-						common.BlackBoxDuration:             true,
-						common.TotalDuration:                true,
-					}, IncludeSyscallStat: true,
-					IncludeConnDesc: true,
-					RecordToStringOptions: protocol.RecordToStringOptions{
-						IncludeReqBody:     true,
-						IncludeRespBody:    true,
-						RecordMaxDumpBytes: 1024,
-					},
-				}))
-			}
-		}
+		// for {
+		// 	select {
+		// 	case <-ctx.Done():
+		// 		return
+		// 	case r := <-ch:
+		// 		c.BPFEventLog.Warnln(r.String(common.AnnotatedRecordToStringOptions{
+		// 			Nano: false,
+		// 			MetricTypeSet: common.MetricTypeSet{
+		// 				common.ResponseSize:                 false,
+		// 				common.RequestSize:                  false,
+		// 				common.ReadFromSocketBufferDuration: true,
+		// 				common.BlackBoxDuration:             true,
+		// 				common.TotalDuration:                true,
+		// 			}, IncludeSyscallStat: true,
+		// 			IncludeConnDesc: true,
+		// 			RecordToStringOptions: protocol.RecordToStringOptions{
+		// 				IncludeReqBody:     true,
+		// 				IncludeRespBody:    true,
+		// 				RecordMaxDumpBytes: 1024,
+		// 			},
+		// 		}))
+		// 	}
+		// }
 	} else {
-		c.SetLogToFile()
-		records := &[]*common.AnnotatedRecord{}
-		m := NewModel(options, records, tea.WindowSizeMsg{}, common.NoneType, false).(*model)
-		if !options.StaticRecord {
-			go func(mod *model, channel chan *common.AnnotatedRecord) {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case r := <-ch:
-						lock.Lock()
-						*m.records = append(*m.records, r)
-						if len(*m.records) > m.options.MaxRecords {
-							*m.records = (*m.records)[(len(*m.records) - m.options.MaxRecords):]
-						}
-						lock.Unlock()
-					}
-				}
-			}(m, ch)
-		}
-		prog := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
-		if _, err := prog.Run(); err != nil {
-			fmt.Println("Error running program:", err)
-			os.Exit(1)
+		// 如果是单机使用，直接打印,暂不支持
+		if false {
+			PrintDataByTea(ctx, options, ch)
+		} else {
+			fmt.Println("SendDataToK8s!")
+			// 否则通过当前k8s接口上报数据
+			SendDataToK8s(ctx, options, ch)
 		}
 	}
+}
 
+func SendDataToK8s(ctx context.Context, options WatchOptions, ch chan *common.AnnotatedRecord) {
+	// 监听通道中的数据并发送到Kubernetes服务
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case record := <-ch:
+			// 将record发送到Kubernetes服务kt-npd
+			// 这里假设kt-npd服务在default命名空间中，并且有一个/receiveData的端点
+			serviceURL := "http://kt-npd-server.kt.svc.cluster.local:8080/save"
+			err := sendRecordToService(serviceURL, record)
+			if err != nil {
+				c.DefaultLog.Errorf("Error sending record to service: %v", err)
+			}
+		}
+	}
+}
+
+type ConnectionRecord struct {
+	ID                int       `json:"id"`
+	ConnectionDesc    string    `json:"connection_desc"`
+	Protocol          string    `json:"protocol"`
+	TotalTimeMs       float64   `json:"total_time_ms"`
+	RequestSize       int       `json:"request_size"`
+	ResponseSize      int       `json:"response_size"`
+	Process           string    `json:"process"`
+	NetInternalTimeMs float64   `json:"net_internal_time_ms"`
+	ReadSocketTimeMs  float64   `json:"read_socket_time_ms"`
+	StartTime         time.Time `json:"start_time"`
+	Request           string    `json:"request"`
+	Response          string    `json:"response"`
+}
+
+func recordToConnectionRecord(record *common.AnnotatedRecord) *ConnectionRecord {
+	return &ConnectionRecord{
+		ConnectionDesc:    record.ConnDesc.SimpleString(),
+		Protocol:          bpf.ProtocolNamesMap[bpf.AgentTrafficProtocolT(record.ConnDesc.Protocol)],
+		TotalTimeMs:       c.ConvertDurationToMillisecondsIfNeeded(record.TotalDuration, false),
+		RequestSize:       record.ReqSize,
+		ResponseSize:      record.RespSize,
+		Process:           c.GetPidCmdString(int32(record.Pid)),
+		NetInternalTimeMs: c.ConvertDurationToMillisecondsIfNeeded(record.BlackBoxDuration, false),
+		ReadSocketTimeMs:  c.ConvertDurationToMillisecondsIfNeeded(record.ReadFromSocketBufferDuration, false),
+		StartTime:         time.Unix(0, int64(record.StartTs)),
+		Request:           record.Req.FormatToString(),
+		Response:          record.Resp.FormatToString(),
+	}
+}
+
+func sendRecordToService(url string, record *common.AnnotatedRecord) error {
+	// 将record转换为ConnectionRecord
+	connectionRecord := recordToConnectionRecord(record)
+	// 将record转换为JSON
+	data, err := json.Marshal(connectionRecord)
+	if err != nil {
+		return fmt.Errorf("error marshalling record: %v", err)
+	}
+
+	// 发送HTTP POST请求
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("received non-OK response: %v", resp.Status)
+	}
+	return nil
+}
+
+func PrintDataByTea(ctx context.Context, options WatchOptions, ch chan *common.AnnotatedRecord) {
+	c.SetLogToFile()
+	records := &[]*common.AnnotatedRecord{}
+	m := NewModel(options, records, tea.WindowSizeMsg{}, common.NoneType, false).(*model)
+	if !options.StaticRecord {
+		go func(mod *model, channel chan *common.AnnotatedRecord) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case r := <-ch:
+					lock.Lock()
+					*m.records = append(*m.records, r)
+					if len(*m.records) > m.options.MaxRecords {
+						*m.records = (*m.records)[(len(*m.records) - m.options.MaxRecords):]
+					}
+					lock.Unlock()
+				}
+			}
+		}(m, ch)
+	}
+	prog := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
+	if _, err := prog.Run(); err != nil {
+		fmt.Println("Error running program:", err)
+		os.Exit(1)
+	}
 }
 
 func (m *model) SortBy() rc.SortBy {

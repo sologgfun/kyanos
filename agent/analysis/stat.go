@@ -1,11 +1,16 @@
 package analysis
 
 import (
+	"fmt"
+	"kyanos/agent/analysis/common"
 	analysisCommon "kyanos/agent/analysis/common"
 	"kyanos/agent/conn"
 	"kyanos/agent/protocol"
 	"kyanos/bpf"
 	. "kyanos/common"
+	c "kyanos/common"
+	"strings"
+	"time"
 
 	"github.com/jefurry/logrus"
 )
@@ -149,13 +154,20 @@ func prepareEvents(r protocol.Record, connection *conn.Connection4) *events {
 }
 
 func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connection4, recordsChannel chan<- *analysisCommon.AnnotatedRecord) error {
+	// 获取连接的流事件
 	streamEvents := connection.StreamEvents
+
+	// 创建一个注释记录
 	annotatedRecord := CreateAnnotedRecord()
 	annotatedRecord.Record = r
+
+	// 判断连接的侧面（客户端或服务器端）
 	var side SideEnum = ClientSide
 	if connection.IsServerSide() {
 		side = ServerSide
 	}
+
+	// 填充连接描述信息
 	annotatedRecord.ConnDesc = ConnDesc{
 		RemotePort: Port(connection.RemotePort),
 		RemoteAddr: connection.RemoteIp,
@@ -167,14 +179,18 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 		IsSsl:      connection.IsSsl(),
 	}
 
+	// 准备事件
 	events := prepareEvents(r, connection)
 
+	// 检查各种事件是否存在
 	hasNicInEvents := len(events.nicIngressEvents) > 0
 	hasDevOutEvents := len(events.devOutEvents) > 0
 	hasReadSyscallEvents := len(events.readSyscallEvents) > 0
 	hasWriteSyscallEvents := len(events.writeSyscallEvents) > 0
 	hasUserCopyEvents := len(events.userCopyEvents) > 0
 	hasTcpInEvents := len(events.tcpInEvents) > 0
+
+	// 处理服务器端的情况
 	if connection.IsServerSide() {
 		if hasNicInEvents {
 			annotatedRecord.StartTs = events.nicIngressEvents[0].GetTimestamp()
@@ -207,6 +223,7 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 		annotatedRecord.ReqNicEventDetails = KernEventsToNicEventDetails(events.nicIngressEvents)
 		annotatedRecord.RespNicEventDetails = KernEventsToNicEventDetails(events.devOutEvents)
 	} else {
+		// 处理客户端的情况
 		if hasWriteSyscallEvents {
 			annotatedRecord.StartTs = events.writeSyscallEvents[0].GetTimestamp()
 		} else {
@@ -248,6 +265,8 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 		annotatedRecord.ReqNicEventDetails = KernEventsToNicEventDetails(events.devOutEvents)
 		annotatedRecord.RespNicEventDetails = KernEventsToNicEventDetails(events.nicIngressEvents)
 	}
+
+	// 标记需要丢弃的序列
 	streamEvents.MarkNeedDiscardSeq(events.egressKernSeq+uint64(events.egressKernLen), true)
 	streamEvents.MarkNeedDiscardSeq(events.ingressKernSeq+uint64(events.ingressKernLen), false)
 	if connection.IsSsl() {
@@ -256,8 +275,10 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 	}
 	// streamEvents.DiscardEventsBySeq(events.egressKernSeq+uint64(events.egressKernLen), true)
 	// streamEvents.DiscardEventsBySeq(events.ingressKernSeq+uint64(events.ingressKernLen), false)
+
+	// 如果记录通道为空，则记录日志
 	if recordsChannel == nil {
-		outputLog.Infoln(annotatedRecord.String(analysisCommon.AnnotatedRecordToStringOptions{
+		outputLog.Warnln(annotatedRecord.String(analysisCommon.AnnotatedRecordToStringOptions{
 			Nano: false,
 			MetricTypeSet: analysisCommon.MetricTypeSet{
 				analysisCommon.ResponseSize:                 false,
@@ -274,9 +295,29 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 			},
 		}))
 	} else {
+		// 使用PrintAnnotatedRecords记录
+		// PrintAnnotatedRecords([]*common.AnnotatedRecord{annotatedRecord})
+		// 否则，将注释记录发送到记录通道
 		recordsChannel <- annotatedRecord
 	}
 	return nil
+}
+
+func PrintAnnotatedRecords(records []*common.AnnotatedRecord) {
+	for _, record := range records {
+		c.DefaultLog.Warn(fmt.Sprintf("Connection: %s", record.ConnDesc.SimpleString()))
+		c.DefaultLog.Warn(fmt.Sprintf("Protocol: %s", bpf.ProtocolNamesMap[bpf.AgentTrafficProtocolT(record.ConnDesc.Protocol)]))
+		c.DefaultLog.Warn(fmt.Sprintf("Total Time: %.2f ms", c.ConvertDurationToMillisecondsIfNeeded(record.TotalDuration, false)))
+		c.DefaultLog.Warn(fmt.Sprintf("Request Size: %d bytes", record.ReqSize))
+		c.DefaultLog.Warn(fmt.Sprintf("Response Size: %d bytes", record.RespSize))
+		c.DefaultLog.Warn(fmt.Sprintf("Process: %s", c.GetPidCmdString(int32(record.Pid))))
+		c.DefaultLog.Warn(fmt.Sprintf("Net/Internal Time: %.2f ms", c.ConvertDurationToMillisecondsIfNeeded(record.BlackBoxDuration, false)))
+		c.DefaultLog.Warn(fmt.Sprintf("Read Socket Time: %.2f ms", c.ConvertDurationToMillisecondsIfNeeded(record.ReadFromSocketBufferDuration, false)))
+		c.DefaultLog.Warn(fmt.Sprintf("Start Time: %s", time.Unix(0, int64(record.StartTs)).Format("15:04:05.000")))
+		c.DefaultLog.Warn(fmt.Sprintf("Request: %s", record.Req.FormatToString()))
+		c.DefaultLog.Warn(fmt.Sprintf("Response: %s", record.Resp.FormatToString()))
+		c.DefaultLog.Warn(strings.Repeat("-w-", 50))
+	}
 }
 
 func KernEventsToEventDetails[K analysisCommon.PacketEventDetail | analysisCommon.SyscallEventDetail](kernEvents []conn.KernEvent) []K {

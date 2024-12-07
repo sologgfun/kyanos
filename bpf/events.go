@@ -250,47 +250,68 @@ func parseSslDataEvent(record []byte) (*SslData, error) {
 	return event, nil
 }
 
+// PullConnDataEvents 从 eBPF 映射中读取连接数据事件，并将其分发到指定的通道
+// ctx: 上下文，用于控制 goroutine 的生命周期
+// channels: 用于传递连接事件的通道数组
+// perfCPUBufferPageNum: 每个 CPU 的缓冲区页数
+// hook: 处理连接事件的钩子函数
 func PullConnDataEvents(ctx context.Context, channels []chan *AgentConnEvtT, perfCPUBufferPageNum int, hook ConnEventHook) error {
+	// 获取系统页面大小
 	pageSize := os.Getpagesize()
+	// 计算每个 CPU 的缓冲区大小
 	perCPUBuffer := pageSize * perfCPUBufferPageNum
+	// 获取事件的大小
 	eventSize := int(unsafe.Sizeof(AgentConnEvtT{}))
+	// 如果事件大小大于等于缓冲区大小，则调整缓冲区大小
 	if eventSize >= perCPUBuffer {
 		perCPUBuffer = perCPUBuffer * (1 + (eventSize / perCPUBuffer))
 	}
+	// 创建 perf 事件读取器
 	reader, err := perf.NewReader(GetMapFromObjs(Objs, "ConnEvtRb"), perCPUBuffer)
 	if err == nil {
-		go func(*perf.Reader) {
+		// 启动一个 goroutine 来读取事件
+		go func(reader *perf.Reader) {
 			defer reader.Close()
 			for {
 				select {
 				case <-ctx.Done():
+					// 上下文取消，退出 goroutine
 					return
 				default:
 				}
+				// 读取事件记录
 				record, err := reader.Read()
 				if err != nil {
 					if errors.Is(err, perf.ErrClosed) {
+						// 读取器关闭，退出 goroutine
 						common.BPFLog.Debug("[dataReader] Received signal, exiting..")
 						return
 					}
+					// 读取错误，继续读取
 					common.BPFLog.Debugf("[dataReader] reading from reader: %s\n", err)
 					continue
 				}
 
+				// 解析连接事件
 				if evt, err := parseConnEvent(record.RawSample); err != nil {
+					// 解析错误，记录日志并继续读取
 					common.AgentLog.Errorf("[dataReader] conn event err: %s\n", err)
 					continue
 				} else {
+					// 如果有钩子函数，调用钩子函数处理事件
 					if hook != nil {
 						hook(evt)
 					}
+					// 计算事件对应的通道索引
 					tgidFd := uint64(evt.ConnInfo.ConnId.Upid.Pid)<<32 | uint64(evt.ConnInfo.ConnId.Fd)
 					ch := channels[int(tgidFd)%len(channels)]
+					// 将事件发送到对应的通道
 					ch <- evt
 				}
 			}
 		}(reader)
 	}
+	// 如果创建读取器失败，记录警告日志
 	if err != nil {
 		common.BPFLog.Warningf("[bpf] set up perf reader failed: %s\n", err)
 	}

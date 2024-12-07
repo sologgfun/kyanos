@@ -135,7 +135,8 @@ func InitLog() {
 	if isValidLogLevel(DefaultLogLevel) {
 		common.DefaultLog.SetLevel(logrus.Level(DefaultLogLevel))
 	} else {
-		common.DefaultLog.SetLevel(logrus.WarnLevel)
+		// 默认Info也打印
+		common.DefaultLog.SetLevel(logrus.InfoLevel)
 	}
 	common.AgentLog.SetLevel(common.DefaultLog.Level)
 	common.BPFEventLog.SetLevel(common.DefaultLog.Level)

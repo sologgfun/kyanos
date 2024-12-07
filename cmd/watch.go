@@ -7,6 +7,8 @@ import (
 )
 
 var maxRecords int
+
+// 定义 watch 命令
 var watchCmd = &cobra.Command{
 	Use: "watch [http|redis|mysql] [flags]",
 	Example: `
@@ -15,16 +17,19 @@ sudo kyanos watch http --side server --pid 1234 --path /foo/bar --host ubuntu.co
 sudo kyanos watch redis --comands GET,SET --keys foo,bar --key-prefix app1:
 sudo kyanos watch mysql --latency 100 --req-size 1024 --resp-size 2048
 	`,
-	Short:            "Capture the request/response recrods",
-	PersistentPreRun: func(cmd *cobra.Command, args []string) { Mode = WatchMode },
+	Short:            "Capture the request/response recrods",                       // 简短描述
+	PersistentPreRun: func(cmd *cobra.Command, args []string) { Mode = WatchMode }, // 在命令运行前设置模式
 	Run: func(cmd *cobra.Command, args []string) {
+		// 获取 list 标志
 		list, err := cmd.Flags().GetBool("list")
 		if err != nil {
 			logger.Errorln(err)
 		} else {
 			if list {
+				// 如果设置了 list 标志，打印支持的协议
 				fmt.Println([]string{"http", "redis", "mysql"})
 			} else {
+				// 初始化过滤器并启动代理
 				options.LatencyFilter = initLatencyFilter(cmd)
 				options.SizeFilter = initSizeFilter(cmd)
 				startAgent()
@@ -34,6 +39,7 @@ sudo kyanos watch mysql --latency 100 --req-size 1024 --resp-size 2048
 }
 
 func init() {
+	// 定义命令行标志
 	watchCmd.Flags().BoolP("list", "l", false, "list all support protocols")
 	watchCmd.PersistentFlags().Float64("latency", 0, "Filter based on request response time")
 	watchCmd.PersistentFlags().Int64("req-size", 0, "Filter based on request bytes size")
@@ -45,5 +51,6 @@ func init() {
 	watchCmd.PersistentFlags().IntVar(&options.WatchOptions.MaxRecordContentDisplayBytes, "max-print-bytes", 1024, "Control how may bytes of record's req/resp can be printed, \n exceeded part are truncated")
 	watchCmd.Flags().SortFlags = false
 	watchCmd.PersistentFlags().SortFlags = false
+	// 将 watch 命令添加到根命令
 	rootCmd.AddCommand(watchCmd)
 }

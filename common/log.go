@@ -1,6 +1,7 @@
 package common
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -49,6 +50,9 @@ func SetLogToFile() {
 			)
 			if err == nil {
 				l.Hooks.Add(hook)
+			} else {
+				// 打印err
+				fmt.Println("rotatelog hook err:", err)
 			}
 		}
 	}

@@ -88,3 +88,23 @@ btfgen:
 
 # keep intermediate (.skel.h, .bpf.o, etc) targets
 .SECONDARY:
+
+IMAGE_NAME ?= ccr.ccs.tencentyun.com/ktns/kt-npd-client
+
+IMAGE_TAG ?= v0.1
+
+build-image = \
+    rm -f kyanos; \
+    make kyanos; \
+    sudo docker buildx build --platform linux/amd64 -t $(IMAGE_NAME):$(IMAGE_TAG) .; \
+    rm -rf kyanos; \
+    # docker push $(IMAGE_NAME):$(IMAGE_TAG);
+
+image: 
+	@$(build-image)
+	
+pushecloud:
+	docker tag ccr.ccs.tencentyun.com/ktns/kt-npd-client:v0.1 todohub/kt-npd-client:v0.1
+	docker push todohub/kt-npd-client:v0.1
+	docker tag ccr.ccs.tencentyun.com/ktns/kt-npd-server:v0.1 todohub/kt-npd-server:v0.1
+	docker push todohub/kt-npd-server:v0.1
