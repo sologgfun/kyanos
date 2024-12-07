@@ -7,6 +7,14 @@
 本工具的架构设计为 **Server-Client 模式**：
 
 - **1 个 Server + n 个 Client**：Server 作为数据汇总和分析的核心，多个 Client 部署在集群的各个节点上，负责流量的采集。
+> 组件参考图
+<img width="538" alt="image" src="https://github.com/user-attachments/assets/60d1b56a-8cd4-40dc-9433-1671b308f8e5">
+
+> server数据库参考图
+<img width="674" alt="image" src="https://github.com/user-attachments/assets/c5a8acda-299c-4629-8fc5-5edb7d8ce74d">
+
+通过client采集数据通过server部署的svc发给server端处理
+
 - **Kubernetes 集成**：通过 Kubernetes 的 YAML 配置文件进行自动化部署，简化集群内应用的部署和管理。
   - **Client 部署**：使用 DaemonSet（DS）在集群的每个节点上部署 Client，确保每个节点上都有一个 Client 实例。
   - **Server 部署**：使用 Deployment 部署 Server，支持水平扩展以应对高负载需求。
