@@ -1,153 +1,51 @@
-# kyanos
-[![GitHub last commit](https://img.shields.io/github/last-commit/hengyoush/kyanos)](#) [![GitHub release](https://img.shields.io/github/v/release/hengyoush/kyanos)](#) [![Test](https://github.com/hengyoush/kyanos/actions/workflows/test.yml/badge.svg)](https://github.com/hengyoush/kyanos/actions/workflows/test.yml)
-![](docs/public/kyanos-demo.gif)
-[简体中文](./README_CN.md) | English 
+# Kyanos 流量抓取工具 - 集群扩展版
 
+本仓库是 **Kyanos** 流量抓取工具的集群扩展版本，专为 Kubernetes 集群环境设计。该工具采用 **1 个 Server + n 个 Client** 的架构，能够高效地在集群中分布式地抓取流量数据并进行集中分析。
 
-- [English Document](https://kyanos.pages.dev/)
+## 系统架构概述
 
-## Table of Contents
-- [What is kyanos](#-what-is-kyanos)
-- [Examples](#-examples)
-- [Requirements](#-requirements)
-- [How to get kyanos](#-how-to-get-kyanos)
-- [Documentation](#-documentation)
-- [Usage](#-usage)
-- [Feedback and Contributions](#-feedback-and-contributions)
-- [Contacts](#%EF%B8%8F-contacts)
+本工具的架构设计为 **Server-Client 模式**：
 
-## What is kyanos
-Kyanos is an **eBPF-based** network issue analysis tool that enables you to capture network requests, such as HTTP, Redis, and MySQL requests.   
-It also helps you analyze abnormal network issues and quickly troubleshooting without the complex steps of packet capturing, downloading, and analysis.
+- **1 个 Server + n 个 Client**：Server 作为数据汇总和分析的核心，多个 Client 部署在集群的各个节点上，负责流量的采集。
+- **Kubernetes 集成**：通过 Kubernetes 的 YAML 配置文件进行自动化部署，简化集群内应用的部署和管理。
+  - **Client 部署**：使用 DaemonSet（DS）在集群的每个节点上部署 Client，确保每个节点上都有一个 Client 实例。
+  - **Server 部署**：使用 Deployment 部署 Server，支持水平扩展以应对高负载需求。
+- **特权 Pod**：利用 Kubernetes 特权 Pod 的特性，客户端能够抓取包括容器在内的各类流量，确保集群内所有节点的流量都能被采集。
+- **临时数据库**：Client 抓取的流量数据会暂时存储到 Server 的数据库中，进行后续分析。
 
-1. **Powerful Traffic Filtering**: Not only can filter based on traditional IP/port information, can also filter by process/container, L7 protocol information, request/response byte size, latency, and more.
+### 当前版本
 
-```bash
-# Filter by pid
-./kyanos watch --pids 1234
-# Filter by container id
-./kyanos watch --container-id abc
-# Filter by Redis key
-./kyanos watch redis --keys my-key1,my-key2
-# Filter by response byte size
-./kyanos watch --resp-size 10000
-```
+**v1.0.0** - 已验证可行性，并在实际环境中部署成功。
 
-2. **Advanced Analysis Capabilities** : Unlike tcpdump, which only provides fine-grained packet capture, Kyanos supports aggregating captured packet metrics across various dimensions, quickly providing the critical data most useful for troubleshooting.  
-Imagine if the bandwidth of your HTTP service is suddenly maxed out—how would you quickly analyze `which IPs` and `which  requests` are causing it?  
-With Kyanos, you just need one command: `kyanos stat http --bigresp` to find the largest response byte sizes sent to remote IPs and view specific data on request and response metrics.  
-![kyanos find big response](docs/public/whatkyanos.gif)
+## 后续开发计划
 
-3. **In-Depth Kernel-Level Latency Details**: In real-world, slow queries to remote services like Redis can be challenging to diagnose precisely. Kyanos provides kernel trace points from the arrival of requests/responses at the network card to the kernel socket buffer, displaying these details in a visual format. This allows you to identify exactly which stage is causing delays.
+以下是未来版本的开发计划和功能优化方向：
 
-![kyanos time detail](docs/public/timedetail.jpg) 
+### 1. **eBPF 功能优化**
+   - 当前 eBPF 功能基于 Kyanos 库实现，但在性能和灵活性上还有提升空间。我们正在探索如何优化 eBPF 以更好地支持大规模集群的流量抓取。
 
-4. **Lightweight and Dependency-Free**: Almost zero dependencies—just a single binary file and one command, with all results displayed in the command line.
+### 2. **SQL Web GUI 数据分析界面**
+   - 后续将为 Server 增加一个 SQL Web GUI，允许用户通过 Web 界面查询和分析捕获的流量数据。此功能将使用户可以通过直观的界面进行实时数据分析，简化操作和使用。
 
-5. **Automatic SSL Traffic Decryption** : All captured requests and responses are presented in plaintext.
+### 3. **兼容性提升**
+   - 我们将持续增强与不同 Kubernetes 版本以及云原生环境的兼容性，以确保工具能够在各种 Kubernetes 集群中无缝运行。
 
-## Examples
+### 4. **Benchmark 性能分析**
+   - 我们计划对工具的性能进行全面的基准测试，评估其在不同规模集群中的表现，并针对性能瓶颈进行优化，确保在生产环境下的高效运行。
 
-**Capture HTTP Traffic with Latency Details**  
+## 主要特性
 
-Run the command:
-```bash
-./kyanos watch http
-```
-The result is as follows:
+- **可扩展的部署架构**：可以在 Kubernetes 集群中轻松部署和扩展，支持大规模分布式部署，无侵入性。
+- **分布式流量抓取**：客户端利用特权 Pod 捕获每个节点（包括容器）的网络流量，确保集群内所有节点的数据都能被捕获。
+- **集中式数据收集**：所有抓取的流量数据都集中存储在 Server 的临时数据库中，便于后续的数据分析。
+- **可定制和可扩展**：支持用户根据需求自定义抓取规则、数据处理方式等，适应不同的业务场景。
 
-![kyanos quick start watch http](docs/public/qs-watch-http.gif)
+## 开发指南
 
+1. server和client分别见server文件和根目录
+2. 个人使用云主机基于debian12.0远程开发，进行开发需要一定ebpf及golang的基础知识，可参考下方文档
 
-**Capture Redis Traffic with Latency Details**  
-
-Run the command:
-```bash
-./kyanos watch redis
-```
-The result is as follows:
-
-![kyanos quick start watch redis](docs/public/qs-redis.gif)
-
-**Identify the Slowest Requests in the Last 5 Seconds**
-
-Run the command:
-```bash
- ./kyanos stat --slow --time 5 
-```
-The result is as follows:
-
-![kyanos stat slow](docs/public/qs-stat-slow.gif)
-
-## ❗ Requirements
-
-Kyanos currently supports kernel versions 3.10(from 3.10.0-957) and 4.14 or above (with plans to support versions between 4.7 and 4.14 in the future).  
-> You can check your kernel version using `uname -r`.
-
-
-## 🎯 How to get kyanos 
-
-You can download a statically linked binary compatible with x86_64 and arm64 architectures from the [release page](https://github.com/hengyoush/kyanos/releases):
-
-```bash
-tar xvf kyanos_vx.x.x_linux_x86.tar.gz
-```
-
-Then, run:
-```bash
-kyanos watch 
-```
-
-If the following table appears:
-![kyanos quick start success](docs/public/quickstart-success.png)
-🎉 Congratulations! Kyanos has started successfully.
-
-## 📝 Documentation
-
-[English Document](https://kyanos.pages.dev/)
-
-## ⚙ Usage
-
-The simplest usage captures all protocols currently supported by Kyanos:
-
-```bash
-./kyanos watch
-```
-
-Each request-response record is stored as a row in a table, with each column capturing basic information about that request. You can use the arrow keys or `j/k` to move up and down through the records:
-![kyanos watch result](docs/public/watch-result.jpg)  
-
-Press `Enter` to access the details view:
-
-![kyanos watch result detail](docs/public/watch-result-detail.jpg)  
-
-In the details view, the first section shows **Latency Details**. Each block represents a "node" that the data packet passes through, such as the process, network card, and socket buffer.  
-Each block includes a time value indicating the time elapsed from the previous node to this node, showing the process flow from the process sending the request to the network card, to the response being copied to the socket buffer, and finally read by the process, with each step’s duration displayed.
-
-The second section provides **Detailed Request and Response Content**, split into Request and Response parts, and truncates content over 1024 bytes.
-
-For targeted traffic capture, such as HTTP traffic:
-
-```bash
-./kyanos watch http
-```
-
-You can narrow it further to capture traffic for a specific HTTP path:
-
-```bash
-./kyanos watch http --path /abc 
-```
-
-Learn more: [Kyanos Docs](https://kyanos.pages.dev/)
-
-
-## 🤝 Feedback and Contributions
-> [!IMPORTANT]
-> If you encounter any issues or bugs while using the tool, please feel free to ask questions in the issue tracker.
-
-## 🗨️ Contacts
-For more detailed inquiries, you can use the following contact methods:
-- **My Email:** [hengyoush1@163.com](mailto:hengyoush1@163.com)
-- **My Blog:** [http://blog.deadlock.cloud](http://blog.deadlock.cloud/)
-
-[Back to top](#top)
+## 参考资料
+- [Getting Started with eBPF in Go](https://ebpf-go.dev/guides/getting-started/)
+- [[译] 为容器时代设计的高级 eBPF 内核特性（FOSDEM, 2021）](https://arthurchiao.art/blog/advanced-bpf-kernel-features-for-container-age-zh/#41-进出宿主机的容器流量host---pod)
+- [eBPF 开发实践教程](https://eunomia.dev/zh/tutorials/)
