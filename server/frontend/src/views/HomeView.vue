@@ -1,9 +1,9 @@
 <script setup>
-import TheWelcome from '../components/TheWelcome.vue'
+import DataTable from '../components/DataTable.vue'
 </script>
 
 <template>
   <main>
-    <TheWelcome />
+    <DataTable />
   </main>
 </template>
