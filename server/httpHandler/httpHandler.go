@@ -55,3 +55,15 @@ func PostConnectionRecord(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintln(w, "Record inserted successfully")
 }
+
+func GetConnectionRecords(w http.ResponseWriter, r *http.Request) {
+	var records []ConnectionRecord
+	result := db.Find(&records)
+	if result.Error != nil {
+		http.Error(w, result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
